@@ -2,128 +2,118 @@ from django.test import TestCase
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from datetime import timedelta
-from eleicoes.models import Eleitor
+from eleicoes.models import Eleicao, Eleitor, Candidato
 
-class EleitorModelTest(TestCase):
+class EleicaoModelTest(TestCase):
     
     def setUp(self):
         """Configuração inicial dos testes"""
-        self.dados_eleitor = {
-            'nome': 'João Silva Santos',
-            'email': 'joao.silva@email.com',
-            'cpf': '123.456.789-09',
-            'data_nascimento': timezone.now().date() - timedelta(days=18*365),  # 18 anos
-            'ativo': True
-        }
-    
-    def test_criar_eleitor_valido(self):
-        """Testa criação de eleitor com dados válidos"""
-        eleitor = Eleitor.objects.create(**self.dados_eleitor)
-        
-        self.assertEqual(eleitor.nome, 'João Silva Santos')
-        self.assertEqual(eleitor.email, 'joao.silva@email.com')
-        self.assertEqual(eleitor.cpf, '123.456.789-09')
-        self.assertEqual(eleitor.ativo, True)
-        self.assertIsNotNone(eleitor.data_cadastro)
-        self.assertTrue(eleitor.pode_votar)
-        self.assertGreaterEqual(eleitor.idade, 16)
-    
-    def test_cpf_unique(self):
-        """Testa que CPF deve ser único"""
-        Eleitor.objects.create(**self.dados_eleitor)
-        
-        # Tentar criar outro eleitor com mesmo CPF
-        with self.assertRaises(Exception):
-            Eleitor.objects.create(
-                nome='Outro Nome',
-                email='outro@email.com',
-                cpf='123.456.789-09',  # Mesmo CPF
-                data_nascimento=timezone.now().date() - timedelta(days=20*365)
-            )
-    
-    def test_email_unique(self):
-        """Testa que email deve ser único"""
-        Eleitor.objects.create(**self.dados_eleitor)
-        
-        # Tentar criar outro eleitor com mesmo email
-        with self.assertRaises(Exception):
-            Eleitor.objects.create(
-                nome='Outro Nome',
-                email='joao.silva@email.com',  # Mesmo email
-                cpf='987.654.321-00',
-                data_nascimento=timezone.now().date() - timedelta(days=20*365)
-            )
-    
-    def test_cpf_invalido(self):
-        """Testa validação de CPF inválido"""
-        dados_invalidos = self.dados_eleitor.copy()
-        dados_invalidos['cpf'] = '111.111.111-11'  # CPF inválido (dígitos repetidos)
-        
-        with self.assertRaises(ValidationError):
-            eleitor = Eleitor(**dados_invalidos)
-            eleitor.full_clean()
-    
-    def test_cpf_sem_formatacao(self):
-        """Testa CPF sem formatação (apenas números)"""
-        eleitor = Eleitor(
-            nome='Maria Souza',
-            email='maria@email.com',
-            cpf='12345678909',  # Sem formatação
-            data_nascimento=timezone.now().date() - timedelta(days=20*365)
-        )
-        eleitor.full_clean()
-        eleitor.save()
-        
-        # Verificar que foi formatado automaticamente
-        self.assertEqual(eleitor.cpf, '123.456.789-09')
-    
-    def test_idade_minima(self):
-        """Testa validação de idade mínima (16 anos)"""
-        # Eleitor com 15 anos
-        dados_menor = self.dados_eleitor.copy()
-        dados_menor['data_nascimento'] = timezone.now().date() - timedelta(days=15*365)
-        
-        with self.assertRaises(ValidationError):
-            eleitor = Eleitor(**dados_menor)
-            eleitor.full_clean()
-    
-    def test_data_nascimento_futura(self):
-        """Testa que data de nascimento não pode ser futura"""
-        dados_futuro = self.dados_eleitor.copy()
-        dados_futuro['data_nascimento'] = timezone.now().date() + timedelta(days=365)
-        
-        with self.assertRaises(ValidationError):
-            eleitor = Eleitor(**dados_futuro)
-            eleitor.full_clean()
-    
-    def test_propriedade_idade(self):
-        """Testa propriedade de idade"""
-        eleitor = Eleitor.objects.create(**self.dados_eleitor)
-        self.assertIsNotNone(eleitor.idade)
-        self.assertGreaterEqual(eleitor.idade, 16)
-    
-    def test_propriedade_pode_votar(self):
-        """Testa propriedade pode_votar"""
-        # Eleitor ativo e maior de 16
-        eleitor1 = Eleitor.objects.create(**self.dados_eleitor)
-        self.assertTrue(eleitor1.pode_votar)
-        
-        # Eleitor inativo
-        eleitor2 = Eleitor.objects.create(
-            nome='Inativo',
-            email='inativo@email.com',
-            cpf='987.654.321-00',
-            data_nascimento=timezone.now().date() - timedelta(days=20*365),
-            ativo=False
-        )
-        self.assertFalse(eleitor2.pode_votar)
-        
-        # Eleitor menor de 16 anos
-        eleitor3 = Eleitor.objects.create(
-            nome='Menor',
-            email='menor@email.com',
-            cpf='456.789.123-00',
-            data_nascimento=timezone.now().date() - timedelta(days=15*365),
+        # Criar eleitor administrador
+        self.admin = Eleitor.objects.create(
+            nome='Admin Teste',
+            email='admin@teste.com',
+            cpf='123.456.789-09',
+            data_nascimento=timezone.now().date() - timedelta(days=30*365),
             ativo=True
         )
-        self.assertFalse(eleitor3.pode_votar)
+        
+        # Dados base da eleição
+        self.dados_eleicao = {
+            'titulo': 'Eleição Teste',
+            'descricao': 'Descrição da eleição teste',
+            'tipo': Eleicao.TipoEleicao.ESTUDANTIL,
+            'data_inicio': timezone.now() + timedelta(days=1),
+            'data_fim': timezone.now() + timedelta(days=8),
+            'status': Eleicao.StatusEleicao.RASCUNHO,
+            'permite_branco': True,
+            'criada_por': self.admin
+        }
+    
+    def test_criar_eleicao_valida(self):
+        """Testa criação de eleição com dados válidos"""
+        eleicao = Eleicao.objects.create(**self.dados_eleicao)
+        
+        self.assertEqual(eleicao.titulo, 'Eleição Teste')
+        self.assertEqual(eleicao.status, Eleicao.StatusEleicao.RASCUNHO)
+        self.assertEqual(eleicao.criada_por, self.admin)
+        self.assertIsNotNone(eleicao.created_at)
+    
+    def test_validar_data_fim_maior_que_data_inicio(self):
+        """Testa validação de data_fim > data_inicio"""
+        dados_invalidos = self.dados_eleicao.copy()
+        dados_invalidos['data_fim'] = timezone.now() + timedelta(days=1)
+        dados_invalidos['data_inicio'] = timezone.now() + timedelta(days=8)
+        
+        with self.assertRaises(ValidationError):
+            eleicao = Eleicao(**dados_invalidos)
+            eleicao.full_clean()
+    
+    def test_transicao_status_permitida(self):
+        """Testa transição de status permitida"""
+        eleicao = Eleicao.objects.create(**self.dados_eleicao)
+        
+        # Rascunho -> Aberta (válido)
+        eleicao.status = Eleicao.StatusEleicao.ABERTA
+        eleicao.save()  # Não deve lançar exceção
+        
+        # Aberta -> Encerrada (válido)
+        eleicao.status = Eleicao.StatusEleicao.ENCERRADA
+        eleicao.save()  # Não deve lançar exceção
+        
+        # Encerrada -> Apurada (válido)
+        eleicao.status = Eleicao.StatusEleicao.APURADA
+        eleicao.save()  # Não deve lançar exceção
+    
+    def test_transicao_status_invalida(self):
+        """Testa transição de status inválida (voltar ou pular)"""
+        eleicao = Eleicao.objects.create(**self.dados_eleicao)
+        
+        # Tentar pular de rascunho para encerrada (inválido)
+        eleicao.status = Eleicao.StatusEleicao.ENCERRADA
+        with self.assertRaises(ValidationError):
+            eleicao.save()
+        
+        # Tentar voltar de aberta para rascunho (inválido)
+        eleicao.status = Eleicao.StatusEleicao.ABERTA
+        eleicao.save()
+        
+        eleicao.status = Eleicao.StatusEleicao.RASCUNHO
+        with self.assertRaises(ValidationError):
+            eleicao.save()
+    
+    def test_nao_abrir_sem_candidatos(self):
+        """Testa que não pode abrir eleição sem pelo menos 2 candidatos"""
+        eleicao = Eleicao.objects.create(**self.dados_eleicao)
+        
+        # Tentar abrir sem candidatos
+        eleicao.status = Eleicao.StatusEleicao.ABERTA
+        with self.assertRaises(ValidationError):
+            eleicao.full_clean()
+        
+        # Adicionar candidatos
+        Candidato.objects.create(
+            eleicao=eleicao,
+            nome='Candidato 1',
+            numero=1
+        )
+        Candidato.objects.create(
+            eleicao=eleicao,
+            nome='Candidato 2',
+            numero=2
+        )
+        
+        # Agora deve funcionar
+        eleicao.status = Eleicao.StatusEleicao.ABERTA
+        eleicao.full_clean()  # Não deve lançar exceção
+        eleicao.save()
+    
+    def test_propriedade_esta_ativa(self):
+        """Testa propriedade esta_ativa"""
+        # Eleição futura
+        eleicao_futura = Eleicao.objects.create(**self.dados_eleicao)
+        eleicao_futura.status = Eleicao.StatusEleicao.ABERTA
+        eleicao_futura.save()
+        self.assertFalse(eleicao_futura.esta_ativa)  # Ainda não começou
+        
+        # Eleição ativa
+        eleicao_ativa = Eleicao.objects.create

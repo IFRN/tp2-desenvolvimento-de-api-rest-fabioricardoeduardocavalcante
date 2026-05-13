@@ -1,14 +1,6 @@
 from django.db import models
 from django.core.exceptions import ValidationError
-from django.utils import timezone
-import secrets
-import hashlib
-import re
-
-from django.db import models
-from django.core.exceptions import ValidationError
-from django.utils import timezone
-from .models_eleitor import Eleitor  # Assumindo que Eleitor está em models_eleitor.py
+from django.core.validators import MinValueValidator, MaxValueValidator 
 
 class Eleicao(models.Model):
     """
@@ -84,11 +76,13 @@ class Eleicao(models.Model):
     )
     
     criada_por = models.ForeignKey(
-        Eleitor,
+        'Eleitor',
         on_delete=models.PROTECT,  # PROTECT impede exclusão do administrador se criou eleições
         related_name='eleicoes_criadas',
         verbose_name='Criada por',
-        help_text='Administrador responsável pela criação da eleição'
+        help_text='Administrador responsável pela criação da eleição',
+        null=True,
+        blank=True
     )
     
     created_at = models.DateTimeField(
@@ -349,14 +343,197 @@ class Eleicao(models.Model):
     def __str__(self):
         return self.titulo
 
-
 class Candidato(models.Model):
-    eleicao = models.ForeignKey(Eleicao, on_delete=models.CASCADE, related_name='candidatos')
-    nome = models.CharField(max_length=200)
-    numero = models.PositiveIntegerField()
-    partido = models.CharField(max_length=100, blank=True)
-    foto_url = models.URLField(blank=True)
-    descricao = models.TextField(blank=True)
+    """
+    Entidade de Candidato conforme especificação do projeto.
+    Cada candidato é vinculado a uma eleição específica.
+    """
+    
+    # Relacionamento com Eleição (on_delete=CASCADE conforme especificação)
+    eleicao = models.ForeignKey(
+        Eleicao,
+        on_delete=models.CASCADE,  # Se a eleição for excluída, candidatos também são
+        related_name='candidatos',
+        verbose_name='Eleição',
+        help_text='Eleição à qual o candidato pertence'
+    )
+    
+    # Número de exibição do candidato (único por eleição)
+    numero = models.PositiveIntegerField(
+        validators=[
+            MinValueValidator(1, message='Número do candidato deve ser maior que zero.'),
+            MaxValueValidator(99999, message='Número do candidato muito grande.')
+        ],
+        verbose_name='Número',
+        help_text='Número de identificação do candidato na urna (único por eleição)'
+    )
+    
+    # Nome completo do candidato
+    nome = models.CharField(
+        max_length=150,
+        verbose_name='Nome Completo',
+        help_text='Nome completo do candidato'
+    )
+    
+    # Nome que aparecerá na urna (pode ser apelido ou nome de campanha)
+    nome_urna = models.CharField(
+        max_length=50,
+        verbose_name='Nome na Urna',
+        help_text='Nome que aparecerá na urna eletrônica (máximo 50 caracteres)'
+    )
+    
+    # Partido ou chapa do candidato
+    partido_ou_chapa = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name='Partido/Chapa',
+        help_text='Partido político ou chapa do candidato (opcional)'
+    )
+    
+    # Proposta do candidato
+    proposta = models.TextField(
+        blank=True,
+        verbose_name='Proposta',
+        help_text='Proposta ou plano de governo do candidato'
+    )
+    
+    # URL da foto do candidato
+    foto_url = models.URLField(
+        blank=True,
+        verbose_name='URL da Foto',
+        help_text='URL da foto do candidato (opcional)'
+    )
+    
+    # Metadados
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='Data de Criação'
+    )
+    
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name='Data de Atualização'
+    )
+    
+    class Meta:
+        verbose_name = 'Candidato'
+        verbose_name_plural = 'Candidatos'
+        ordering = ['eleicao', 'numero']
+        
+        # CRÍTICO: Números são únicos POR ELEIÇÃO
+        unique_together = [['eleicao', 'numero']]
+        
+        indexes = [
+            models.Index(fields=['eleicao', 'numero']),  # Índice composto para performance
+            models.Index(fields=['eleicao', 'nome']),
+            models.Index(fields=['nome_urna']),
+        ]
+    
+    def __str__(self):
+        return f"{self.numero} - {self.nome_urna} ({self.eleicao.titulo})"
+    
+    def clean(self):
+        """
+        Validações customizadas:
+        1. Nome urna não pode ser vazio
+        2. Validação do número dentro do contexto da eleição
+        3. Verificar se eleição permite novos candidatos (não está aberta/encerrada)
+        """
+        super().clean()
+        
+        # Validar nome_urna não vazio (deve ter pelo menos 3 caracteres)
+        if not self.nome_urna or len(self.nome_urna.strip()) < 3:
+            raise ValidationError({
+                'nome_urna': 'O nome na urna deve ter pelo menos 3 caracteres.'
+            })
+        
+        # Validar número do candidato
+        if self.numero:
+            # Número 0 é reservado para voto em branco (se permitido)
+            if self.numero == 0:
+                raise ValidationError({
+                    'numero': 'Número 0 é reservado para voto em branco.'
+                })
+        
+        # Validar se a eleição permite adicionar/editar candidatos
+        if self.eleicao_id:
+            self._validar_eleicao_para_edicao()
+    
+    def _validar_eleicao_para_edicao(self):
+        """
+        Valida se a eleição está em estado que permite modificação de candidatos
+        """
+        if self.pk:  # Atualização de candidato existente
+            # Buscar eleicao original
+            try:
+                original = Candidato.objects.get(pk=self.pk)
+                if original.eleicao_id != self.eleicao_id:
+                    raise ValidationError({
+                        'eleicao': 'Não é possível transferir um candidato para outra eleição.'
+                    })
+            except Candidato.DoesNotExist:
+                pass
+        
+        # Verificar status da eleição
+        if self.eleicao and self.eleicao.status != Eleicao.StatusEleicao.RASCUNHO:
+            raise ValidationError({
+                'eleicao': f'Não é possível modificar candidatos de uma eleição que não está em rascunho. Status atual: {self.eleicao.get_status_display()}'
+            })
+    
+    def save(self, *args, **kwargs):
+        """
+        Sobrescrita do save para garantir validações e formatação
+        """
+        # Garantir que nome_urna seja capitalizado (primeiras letras maiúsculas)
+        if self.nome_urna:
+            self.nome_urna = self.nome_urna.strip().title()
+        
+        # Garantir que nome seja capitalizado
+        if self.nome:
+            self.nome = self.nome.strip().title()
+        
+        self.full_clean()  # Executa todas as validações
+        super().save(*args, **kwargs)
+    
+    @property
+    def exibicao_urna(self):
+        """
+        Retorna string formatada para exibição na urna
+        """
+        if self.partido_ou_chapa:
+            return f"{self.numero} - {self.nome_urna} ({self.partido_ou_chapa})"
+        return f"{self.numero} - {self.nome_urna}"
+    
+    @property
+    def total_votos_recebidos(self):
+        """
+        Retorna o total de votos recebidos pelo candidato
+        """
+        from .models_voto import Voto  # Importação tardia para evitar circular
+        return Voto.objects.filter(
+            eleicao=self.eleicao,
+            candidato=self,
+            voto_em_branco=False
+        ).count()
+    
+    @property
+    def percentual_votos(self):
+        """
+        Retorna o percentual de votos recebidos
+        """
+        from .models_voto import Voto
+        total_votos_eleicao = Voto.objects.filter(eleicao=self.eleicao, voto_em_branco=False).count()
+        
+        if total_votos_eleicao == 0:
+            return 0
+        
+        return round((self.total_votos_recebidos / total_votos_eleicao) * 100, 2)
+    
+    def pode_ser_removido(self):
+        """
+        Verifica se o candidato pode ser removido (não recebeu votos)
+        """
+        return self.total_votos_recebidos == 0
     
     class Meta:
         unique_together = ['eleicao', 'numero']
@@ -557,7 +734,7 @@ class RegistroVotacao(models.Model):
     Atende às regras: 'um voto por eleitor' e 'lista de quem compareceu'
     """
     eleicao = models.ForeignKey(Eleicao, on_delete=models.CASCADE, related_name='registros_votacao')
-    eleitor = models.ForeignKey(Eleitor, on_delete=models.CASCADE, related_name='registros_votacao')
+    eleitor = models.ForeignKey('Eleitor', on_delete=models.CASCADE, related_name='registros_votacao')
     data_hora_registro = models.DateTimeField(auto_now_add=True)
     
     class Meta:
